@@ -1,0 +1,45 @@
+name: 'Setup PILOT Node & Shared Dependencies'
+description: 'Action composite centralisée pour configurer Node.js, le cache npm et les liaisons symboliques @shared/core et @shared/ui'
+
+inputs:
+  node-version:
+    description: 'Version de Node.js à configurer'
+    required: false
+    default: '20'
+  include-core:
+    description: 'Cloner pilot-core-library dans ../pilot-core-library'
+    required: false
+    default: 'false'
+  include-ui:
+    description: 'Cloner pilot-ui-library dans ../pilot-ui-library'
+    required: false
+    default: 'false'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: 📦 Cloner pilot-core-library (@shared/core)
+      if: inputs.include-core == 'true'
+      shell: bash
+      run: |
+        if [ ! -d "../pilot-core-library" ]; then
+          git clone --depth 1 https://github.com/kaossar/pilot-core-library.git ../pilot-core-library
+        fi
+
+    - name: 🎨 Cloner pilot-ui-library (@shared/ui)
+      if: inputs.include-ui == 'true'
+      shell: bash
+      run: |
+        if [ ! -d "../pilot-ui-library" ]; then
+          git clone --depth 1 https://github.com/kaossar/pilot-ui-library.git ../pilot-ui-library
+        fi
+
+    - name: ⚙️ Setup Node.js & Cache npm
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: 'npm'
+
+    - name: 📥 Installer les dépendances (npm ci)
+      shell: bash
+      run: npm ci
