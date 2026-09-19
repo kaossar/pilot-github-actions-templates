@@ -19,7 +19,7 @@ runs:
   using: 'composite'
   steps:
     - name: 📦 Cloner pilot-core-library (@shared/core)
-      if: inputs.include-core == 'true'
+      if: ${{ inputs.include-core == 'true' }}
       shell: bash
       run: |
         if [ ! -d "../pilot-core-library" ]; then
@@ -27,7 +27,7 @@ runs:
         fi
 
     - name: 🎨 Cloner pilot-ui-library (@shared/ui)
-      if: inputs.include-ui == 'true'
+      if: ${{ inputs.include-ui == 'true' }}
       shell: bash
       run: |
         if [ ! -d "../pilot-ui-library" ]; then
