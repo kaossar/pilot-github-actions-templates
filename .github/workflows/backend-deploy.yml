@@ -1,0 +1,66 @@
+name: "Backend Deploy (Node.js/EC2)"
+
+on:
+  workflow_call:
+    secrets:
+      AWS_ROLE_ARN:
+        required: true
+        description: "ARN du rôle IAM AWS autorisé via OIDC"
+
+permissions:
+  id-token: write # Requis pour AWS OIDC
+  contents: read  # Requis pour git checkout
+
+jobs:
+  deploy:
+    name: "Deploy Backend via SSM"
+    runs-on: ubuntu-latest
+
+    # Lie le job a un Environnement GitHub (Permet d'activer l'approbation manuelle pour la PROD)
+    environment: 
+      name: ${{ github.ref_name == 'main' && 'prod' || (github.ref_name == 'develop' && 'test' || 'preprod') }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🚦 Verrouillage de l'Environnement (GitFlow)
+        id: env-selector
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "APP_ENV=prod" >> $GITHUB_ENV
+            echo "INSTANCE_TAG=pilot-app-server-prod" >> $GITHUB_ENV
+          elif [[ "${{ github.ref_name }}" == release/* ]] || [ "${{ github.ref_name }}" = "preprod" ]; then
+            echo "APP_ENV=preprod" >> $GITHUB_ENV
+            echo "INSTANCE_TAG=pilot-app-server-preprod" >> $GITHUB_ENV
+          elif [ "${{ github.ref_name }}" = "develop" ]; then
+            echo "APP_ENV=test" >> $GITHUB_ENV
+            echo "INSTANCE_TAG=pilot-app-server-test" >> $GITHUB_ENV
+          else
+            echo "❌ Erreur: La branche ${{ github.ref_name }} n'est pas autorisée à déclencher un déploiement."
+            exit 1
+          fi
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: eu-west-3 # Paris
+
+      - name: Deploy via AWS Systems Manager (SSM)
+        # Utilisation de SSM Send-Command pour executer le deploiement SANS ouvrir le port 22 (SSH)
+        run: |
+          INSTANCE_ID=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=${{ env.INSTANCE_TAG }}" "Name=instance-state-name,Values=running" --query "Reservations[*].Instances[*].InstanceId" --output text)
+          if [ -z "$INSTANCE_ID" ]; then
+            echo "❌ Erreur: Aucune instance EC2 en cours d'execution trouvee pour le tag ${{ env.INSTANCE_TAG }}"
+            exit 1
+          fi
+          
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters commands=["cd /var/www/pilot-backend","git pull origin ${{ github.ref_name }}","npm ci","npm run db:migrate","pm2 restart pilot-backend"] \
+            --query "Command.CommandId" \
+            --output text)
+            
+          echo "Commande SSM envoyee: $COMMAND_ID"

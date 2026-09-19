@@ -1,0 +1,81 @@
+name: "Terraform Apply (OIDC)"
+
+on:
+  workflow_call:
+    inputs:
+      terraform_directory:
+        required: true
+        type: string
+        description: "Dossier contenant le projet Terraform (ex: pilot-terraform-aws-network)"
+    secrets:
+      AWS_ROLE_ARN:
+        required: true
+        description: "ARN du rôle IAM AWS autorisé via OIDC"
+
+permissions:
+  id-token: write # Requis pour AWS OIDC
+  contents: read  # Requis pour git checkout
+
+jobs:
+  terraform:
+    name: "Terraform Plan & Apply"
+    runs-on: ubuntu-latest
+
+    # Lie le job a un Environnement GitHub (Permet d'activer l'approbation manuelle pour la PROD)
+    environment: 
+      name: ${{ github.ref_name == 'main' && 'prod' || (github.ref_name == 'develop' && 'test' || 'preprod') }}
+
+    defaults:
+      run:
+        working-directory: ${{ inputs.terraform_directory }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: eu-west-3 # Paris (Standard pour souveraineté)
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+
+      - name: Terraform Format Check
+        run: terraform fmt -check
+
+      - name: 🚦 Verrouillage de l'Environnement (GitFlow)
+        id: env-selector
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "TF_ENV=prod" >> $GITHUB_ENV
+          elif [[ "${{ github.ref_name }}" == release/* ]] || [ "${{ github.ref_name }}" = "preprod" ]; then
+            echo "TF_ENV=preprod" >> $GITHUB_ENV
+          elif [ "${{ github.ref_name }}" = "develop" ]; then
+            echo "TF_ENV=test" >> $GITHUB_ENV
+          else
+            echo "❌ Erreur: La branche ${{ github.ref_name }} n'est pas autorisée à déclencher un déploiement."
+            exit 1
+          fi
+
+      - name: Terraform Init (Dynamic S3 Backend)
+        run: |
+          terraform init \
+            -backend-config="bucket=pilot-terraform-states-booming-web-studio" \
+            -backend-config="key=${{ inputs.terraform_directory }}/${{ env.TF_ENV }}/terraform.tfstate" \
+            -backend-config="region=eu-west-3" \
+            -backend-config="dynamodb_table=pilot-terraform-state-locks" \
+            -backend-config="encrypt=true"
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: terraform plan -var-file="envs/${{ env.TF_ENV }}.tfvars" -out=tfplan
+
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/') || github.ref == 'refs/heads/preprod' || github.ref == 'refs/heads/develop'
+        run: terraform apply -auto-approve tfplan

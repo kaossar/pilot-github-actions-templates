@@ -1,0 +1,67 @@
+name: "Frontend Deploy (React/Vite)"
+
+on:
+  workflow_call:
+    secrets:
+      AWS_ROLE_ARN:
+        required: true
+        description: "ARN du rôle IAM AWS autorisé via OIDC"
+
+permissions:
+  id-token: write # Requis pour AWS OIDC
+  contents: read  # Requis pour git checkout
+
+jobs:
+  deploy:
+    name: "Build & Deploy Frontend"
+    runs-on: ubuntu-latest
+    
+    # Lie le job a un Environnement GitHub (Permet d'activer l'approbation manuelle pour la PROD)
+    environment: 
+      name: ${{ github.ref_name == 'main' && 'prod' || (github.ref_name == 'develop' && 'test' || 'preprod') }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: 🚦 Verrouillage de l'Environnement (GitFlow)
+        id: env-selector
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "APP_ENV=prod" >> $GITHUB_ENV
+            echo "S3_BUCKET=pilot-frontend-prod-pilot-com" >> $GITHUB_ENV
+          elif [[ "${{ github.ref_name }}" == release/* ]] || [ "${{ github.ref_name }}" = "preprod" ]; then
+            echo "APP_ENV=preprod" >> $GITHUB_ENV
+            echo "S3_BUCKET=pilot-frontend-preprod-pilot-com" >> $GITHUB_ENV
+          elif [ "${{ github.ref_name }}" = "develop" ]; then
+            echo "APP_ENV=test" >> $GITHUB_ENV
+            echo "S3_BUCKET=pilot-frontend-test-pilot-com" >> $GITHUB_ENV
+          else
+            echo "❌ Erreur: La branche ${{ github.ref_name }} n'est pas autorisée à déclencher un déploiement."
+            exit 1
+          fi
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: eu-west-3 # Paris
+
+      - name: Install Dependencies
+        run: make install || npm ci
+
+      - name: Build Application
+        run: make build || npm run build
+        env:
+          VITE_APP_ENV: ${{ env.APP_ENV }}
+
+      - name: Deploy to S3
+        run: aws s3 sync dist/ s3://${{ env.S3_BUCKET }} --delete
+
+      # L'invalidation CloudFront devrait etre ajoutee ici via aws cloudfront create-invalidation
