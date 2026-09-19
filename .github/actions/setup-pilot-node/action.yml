@@ -24,6 +24,7 @@ runs:
       run: |
         if [ ! -d "../pilot-core-library" ]; then
           git clone --depth 1 https://github.com/kaossar/pilot-core-library.git ../pilot-core-library
+          cd ../pilot-core-library && npm ci && cd -
         fi
 
     - name: 🎨 Cloner pilot-ui-library (@shared/ui)
@@ -32,6 +33,7 @@ runs:
       run: |
         if [ ! -d "../pilot-ui-library" ]; then
           git clone --depth 1 https://github.com/kaossar/pilot-ui-library.git ../pilot-ui-library
+          cd ../pilot-ui-library && npm ci && cd -
         fi
 
     - name: ⚙️ Setup Node.js & Cache npm
